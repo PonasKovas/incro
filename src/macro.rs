@@ -2,23 +2,21 @@
 macro_rules! incro {
     ($state:ty, $entry:path) => {
         const _: () = {
-            use ::std::sync::OnceLock;
-            use $crate::async_ffi::FfiFuture;
-            use $crate::async_ffi::FutureExt;
-            use $crate::evdev::InputEvent;
-            use $crate::tokio::sync::Mutex;
-            use $crate::Methods;
+            use ::std::sync::{Mutex, OnceLock};
+            use $crate::evdev;
+            use $crate::Incro;
 
             #[no_mangle]
             static INCRO_VERSION: u64 = $crate::INCRO_VERSION;
 
+            static STATE: OnceLock<Mutex<$state>> = OnceLock::new();
+
             #[no_mangle]
-            extern "C" fn incro_event(methods: Methods, event: InputEvent) -> FfiFuture<bool> {
-                static STATE: OnceLock<Mutex<$state>> = OnceLock::new();
+            extern "C" fn incro_event(incro: Incro, event: evdev::InputEvent) -> bool {
                 let state = STATE
                     .get_or_init(|| Mutex::new(<$state as ::std::default::Default>::default()));
 
-                $entry(methods, state, event).into_ffi()
+                $entry(incro, state, event)
             }
         };
     };

@@ -1,49 +1,83 @@
-pub const INCRO_VERSION: u64 = 0; // bumped on each incompatible ABI change
+pub const INCRO_VERSION: u64 = 1; // bumped on each incompatible ABI change
 
-pub use async_ffi;
 pub use evdev;
-pub use task::TaskHandle;
-pub use tokio;
+pub use scopeguard;
 
-use async_ffi::FfiFuture;
-use evdev::{uinput::VirtualDevice, InputEvent};
+use evdev::InputEvent;
 use event_sender::EventSender;
-use std::{future::Future, sync::Mutex};
-use task::TaskSpawner;
+use std::ops::ControlFlow;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    mpsc::Sender,
+    Arc,
+};
 
 mod event_sender;
 mod r#macro;
-mod sleep;
-mod task;
 
-#[derive(Clone, Copy)]
+/// Incro handle, contains all available methods for the callback
+#[derive(Clone)]
 #[repr(C)]
-pub struct Methods {
+pub struct Incro {
     event_sender: EventSender,
-    task_spawner: TaskSpawner,
-    sleep: extern "C" fn(secs: u64, nanos: u32) -> FfiFuture<()>,
-    precise_sleep: extern "C" fn(secs: u64, nanos: u32) -> FfiFuture<()>,
+    parent_thread: Option<ThreadHandle>,
 }
 
-impl Methods {
-    pub fn new(virtual_device: *const Mutex<VirtualDevice>) -> Self {
+/// Handle of an Incro-style spawned thread
+#[derive(Clone)]
+pub struct ThreadHandle {
+    should_stop: Arc<AtomicBool>,
+}
+
+impl Incro {
+    #[doc(hidden)]
+    pub fn new(event_sender: Sender<Vec<InputEvent>>) -> Self {
         Self {
-            event_sender: EventSender::new(virtual_device),
-            task_spawner: TaskSpawner::new(),
-            sleep: sleep::sleep,
-            precise_sleep: sleep::precise_sleep,
+            event_sender: EventSender::new(event_sender),
+            parent_thread: None,
         }
     }
-    pub fn emit(&self, events: &[InputEvent]) {
+    #[must_use]
+    /// Emits fake events
+    pub fn emit(&self, events: &[InputEvent]) -> ControlFlow<()> {
+        if let Some(parent_thread) = &self.parent_thread {
+            if parent_thread.should_stop.load(Ordering::SeqCst) {
+                return ControlFlow::Break(());
+            }
+        }
         self.event_sender.send(events);
+
+        ControlFlow::Continue(())
     }
-    pub fn spawn<F: Future<Output = ()> + Send + 'static>(&self, future: F) -> TaskHandle {
-        self.task_spawner.spawn(future)
+    /// Spawns a thread
+    pub fn thread<F: FnOnce(Incro) -> ControlFlow<()> + Send + 'static>(
+        &self,
+        f: F,
+    ) -> ThreadHandle {
+        let mut incro = self.clone();
+
+        let atomic = Arc::new(AtomicBool::new(false));
+        let handle = ThreadHandle {
+            should_stop: Arc::clone(&atomic),
+        };
+
+        incro.parent_thread = Some(handle.clone());
+        std::thread::spawn(move || f(incro));
+
+        handle
     }
-    pub async fn sleep(&self, secs: u64, nanos: u32) {
-        (self.sleep)(secs, nanos).await
+}
+
+impl ThreadHandle {
+    pub fn detach(self) {
+        std::mem::forget(self);
     }
-    pub async fn precise_sleep(&self, secs: u64, nanos: u32) {
-        (self.precise_sleep)(secs, nanos).await
+    pub fn stop(self) {}
+}
+
+impl Drop for ThreadHandle {
+    fn drop(&mut self) {
+        self.should_stop
+            .store(true, std::sync::atomic::Ordering::SeqCst);
     }
 }

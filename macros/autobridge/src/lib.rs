@@ -1,14 +1,13 @@
-incro!(State, on_event);
+incro::incro!(State, on_event);
 
-use incro::incro;
 use incro::{
     evdev::{EventType, InputEvent, InputEventKind, Key},
-    tokio::sync::Mutex,
-    Methods, TaskHandle,
+    Incro, ThreadHandle,
 };
+use std::{ops::ControlFlow, sync::Mutex, thread::sleep, time::Duration};
 
 struct State {
-    task: Option<TaskHandle>,
+    thread: Option<ThreadHandle>,
     shift_pressed: bool,
     s_pressed: bool,
     d_pressed: bool,
@@ -18,7 +17,7 @@ struct State {
 impl Default for State {
     fn default() -> Self {
         Self {
-            task: None,
+            thread: None,
             shift_pressed: false,
             s_pressed: false,
             d_pressed: false,
@@ -28,8 +27,8 @@ impl Default for State {
     }
 }
 
-async fn on_event(methods: Methods, state_mutex: &'static Mutex<State>, event: InputEvent) -> bool {
-    let mut state = state_mutex.lock().await;
+fn on_event(incro: Incro, state_mutex: &'static Mutex<State>, event: InputEvent) -> bool {
+    let mut state = state_mutex.lock().unwrap();
 
     match event.kind() {
         InputEventKind::Key(Key::KEY_KP0) => {
@@ -44,7 +43,7 @@ async fn on_event(methods: Methods, state_mutex: &'static Mutex<State>, event: I
             } else if event.value() == 0 {
                 state.shift_pressed = false;
             }
-            state.task.is_some() // ignore if bridging
+            state.thread.is_some() // ignore if bridging
         }
         InputEventKind::Key(Key::KEY_S) => {
             if event.value() == 1 {
@@ -52,7 +51,7 @@ async fn on_event(methods: Methods, state_mutex: &'static Mutex<State>, event: I
             } else if event.value() == 0 {
                 state.s_pressed = false;
             }
-            state.task.is_some() // ignore if bridging
+            state.thread.is_some() // ignore if bridging
         }
         InputEventKind::Key(Key::KEY_D) => {
             if event.value() == 1 {
@@ -60,7 +59,7 @@ async fn on_event(methods: Methods, state_mutex: &'static Mutex<State>, event: I
             } else if event.value() == 0 {
                 state.d_pressed = false;
             }
-            state.task.is_some() // ignore if bridging
+            state.thread.is_some() // ignore if bridging
         }
         InputEventKind::Key(Key::KEY_A) => {
             if event.value() == 1 {
@@ -68,7 +67,7 @@ async fn on_event(methods: Methods, state_mutex: &'static Mutex<State>, event: I
             } else if event.value() == 0 {
                 state.a_pressed = false;
             }
-            state.task.is_some() // ignore if bridging
+            state.thread.is_some() // ignore if bridging
         }
         InputEventKind::Key(Key::KEY_LEFTALT) => {
             if event.value() == 1 {
@@ -80,43 +79,45 @@ async fn on_event(methods: Methods, state_mutex: &'static Mutex<State>, event: I
                 if !state.a_pressed && !state.d_pressed {
                     drop(state);
                     // diagonal bridging
-                    state_mutex.lock().await.task =
-                        Some(methods.spawn(diagonal_bridging(methods, state_mutex)));
+                    state_mutex.lock().unwrap().thread =
+                        Some(incro.thread(move |incro| diagonal_bridging(incro, state_mutex)));
                 } else {
                     drop(state);
                     // normal bridging
-                    state_mutex.lock().await.task =
-                        Some(methods.spawn(normal_bridging(methods, state_mutex)));
+                    state_mutex.lock().unwrap().thread =
+                        Some(incro.thread(move |incro| normal_bridging(incro, state_mutex)));
                 }
 
                 true
             } else if event.value() == 0 {
-                if state.task.is_some() {
-                    state.task = None;
+                if state.thread.is_some() {
+                    state.thread = None;
                     // release mouse button
-                    methods.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 0)]);
+                    let _ =
+                        incro.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 0)]);
                     // release space
-                    methods.emit(&[InputEvent::new(EventType::KEY, Key::KEY_SPACE.code(), 0)]);
+                    let _ =
+                        incro.emit(&[InputEvent::new(EventType::KEY, Key::KEY_SPACE.code(), 0)]);
 
                     // either shift or unshift depending on real situation
-                    methods.emit(&[InputEvent::new(
+                    let _ = incro.emit(&[InputEvent::new(
                         EventType::KEY,
                         Key::KEY_LEFTSHIFT.code(),
                         if state.shift_pressed { 1 } else { 0 },
                     )]);
 
                     // press or release S, D and A depending on real situation
-                    methods.emit(&[InputEvent::new(
+                    let _ = incro.emit(&[InputEvent::new(
                         EventType::KEY,
                         Key::KEY_S.code(),
                         if state.s_pressed { 1 } else { 0 },
                     )]);
-                    methods.emit(&[InputEvent::new(
+                    let _ = incro.emit(&[InputEvent::new(
                         EventType::KEY,
                         Key::KEY_D.code(),
                         if state.d_pressed { 1 } else { 0 },
                     )]);
-                    methods.emit(&[InputEvent::new(
+                    let _ = incro.emit(&[InputEvent::new(
                         EventType::KEY,
                         Key::KEY_A.code(),
                         if state.a_pressed { 1 } else { 0 },
@@ -128,7 +129,7 @@ async fn on_event(methods: Methods, state_mutex: &'static Mutex<State>, event: I
                 }
             } else {
                 // Repeat event spam, ignore if bridging
-                if state.task.is_some() {
+                if state.thread.is_some() {
                     true
                 } else {
                     false
@@ -139,145 +140,143 @@ async fn on_event(methods: Methods, state_mutex: &'static Mutex<State>, event: I
     }
 }
 
-async fn normal_bridging(methods: Methods, state_mutex: &'static Mutex<State>) {
+fn normal_bridging(incro: Incro, state_mutex: &'static Mutex<State>) -> ControlFlow<()> {
     let mut i = 1;
     loop {
         // click
-        methods.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 1)]);
-        methods.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 0)]);
+        incro.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 1)])?;
+        incro.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 0)])?;
 
-        if i % 3 == 0 && state_mutex.lock().await.make_stairs {
+        if i % 3 == 0 && state_mutex.lock().unwrap().make_stairs {
             // jump and place extra block to make stairs
-            methods.emit(&[InputEvent::new(EventType::KEY, Key::KEY_SPACE.code(), 1)]);
+            incro.emit(&[InputEvent::new(EventType::KEY, Key::KEY_SPACE.code(), 1)])?;
 
             // unshift
-            methods.emit(&[InputEvent::new(
+            incro.emit(&[InputEvent::new(
                 EventType::KEY,
                 Key::KEY_LEFTSHIFT.code(),
                 0,
-            )]);
+            )])?;
 
-            methods.precise_sleep(0, 60_000_000).await;
+            sleep(Duration::from_millis(60));
 
             // release space
-            methods.emit(&[InputEvent::new(EventType::KEY, Key::KEY_SPACE.code(), 0)]);
+            incro.emit(&[InputEvent::new(EventType::KEY, Key::KEY_SPACE.code(), 0)])?;
             // shift
-            methods.emit(&[InputEvent::new(
+            incro.emit(&[InputEvent::new(
                 EventType::KEY,
                 Key::KEY_LEFTSHIFT.code(),
                 1,
-            )]);
+            )])?;
 
-            methods.precise_sleep(0, 100_000_000).await;
-
-            // click
-            methods.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 1)]);
-            methods.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 0)]);
-
-            methods.precise_sleep(0, 350_000_000).await;
+            sleep(Duration::from_millis(100));
 
             // click
-            methods.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 1)]);
-            methods.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 0)]);
+            incro.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 1)])?;
+            incro.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 0)])?;
+
+            sleep(Duration::from_millis(350));
+
+            // click
+            incro.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 1)])?;
+            incro.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 0)])?;
 
             i += 1;
         }
 
         // unshift
-        methods.emit(&[InputEvent::new(
+        incro.emit(&[InputEvent::new(
             EventType::KEY,
             Key::KEY_LEFTSHIFT.code(),
             0,
-        )]);
+        )])?;
 
-        methods.precise_sleep(0, 230_642_344).await;
+        sleep(Duration::from_millis(230));
 
         // shift
-        methods.emit(&[InputEvent::new(
+        incro.emit(&[InputEvent::new(
             EventType::KEY,
             Key::KEY_LEFTSHIFT.code(),
             1,
-        )]);
+        )])?;
 
-        methods.precise_sleep(0, 100_000_000).await;
+        sleep(Duration::from_millis(100));
 
         i += 1;
     }
 }
 
-async fn diagonal_bridging(methods: Methods, state_mutex: &'static Mutex<State>) {
+fn diagonal_bridging(incro: Incro, state_mutex: &'static Mutex<State>) -> ControlFlow<()> {
     let mut i = 1;
     loop {
         // click
-        methods.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 1)]);
-        methods.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 0)]);
+        incro.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 1)])?;
+        incro.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 0)])?;
 
-        methods.precise_sleep(0, 50_000_000).await;
+        sleep(Duration::from_millis(50));
 
         // click
-        methods.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 1)]);
-        methods.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 0)]);
+        incro.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 1)])?;
+        incro.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 0)])?;
 
-        if i % 3 == 0 && state_mutex.lock().await.make_stairs {
+        if i % 3 == 0 && state_mutex.lock().unwrap().make_stairs {
             // jump and place extra block to make stairs
-            methods.emit(&[InputEvent::new(EventType::KEY, Key::KEY_SPACE.code(), 1)]);
+            incro.emit(&[InputEvent::new(EventType::KEY, Key::KEY_SPACE.code(), 1)])?;
 
             // unshift
-            methods.emit(&[InputEvent::new(
+            incro.emit(&[InputEvent::new(
                 EventType::KEY,
                 Key::KEY_LEFTSHIFT.code(),
                 0,
-            )]);
+            )])?;
 
-            methods.precise_sleep(0, 300_000_000).await;
+            sleep(Duration::from_millis(300));
 
             // release space
-            methods.emit(&[InputEvent::new(EventType::KEY, Key::KEY_SPACE.code(), 0)]);
+            incro.emit(&[InputEvent::new(EventType::KEY, Key::KEY_SPACE.code(), 0)])?;
             // shift
-            methods.emit(&[InputEvent::new(
+            incro.emit(&[InputEvent::new(
                 EventType::KEY,
                 Key::KEY_LEFTSHIFT.code(),
                 1,
-            )]);
-
-            // methods.precise_sleep(0, 100_000_000).await;
+            )])?;
 
             // click
-            methods.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 1)]);
-            methods.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 0)]);
+            incro.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 1)])?;
+            incro.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 0)])?;
 
-            methods.precise_sleep(0, 250_000_000).await;
-
-            // click
-            methods.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 1)]);
-            methods.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 0)]);
-
-            methods.precise_sleep(0, 50_000_000).await;
+            sleep(Duration::from_millis(250));
 
             // click
-            methods.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 1)]);
-            methods.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 0)]);
+            incro.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 1)])?;
+            incro.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 0)])?;
+
+            sleep(Duration::from_millis(50));
+
+            // click
+            incro.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 1)])?;
+            incro.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 0)])?;
 
             i += 1;
         }
 
         // unshift
-        methods.emit(&[InputEvent::new(
+        incro.emit(&[InputEvent::new(
             EventType::KEY,
             Key::KEY_LEFTSHIFT.code(),
             0,
-        )]);
+        )])?;
 
-        methods.precise_sleep(0, 300_642_344).await;
+        sleep(Duration::from_millis(300));
 
         // shift
-        methods.emit(&[InputEvent::new(
+        incro.emit(&[InputEvent::new(
             EventType::KEY,
             Key::KEY_LEFTSHIFT.code(),
             1,
-        )]);
+        )])?;
 
-        methods.precise_sleep(0, 100_000_000).await;
+        sleep(Duration::from_millis(100));
 
         i += 1;
     }

@@ -1,0 +1,13 @@
+[package]
+name = "incro-bin"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+incro = { path = "../" }
+anyhow = { workspace = true }
+evdev = { workspace = true }
+libloading = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+notify = { workspace = true }

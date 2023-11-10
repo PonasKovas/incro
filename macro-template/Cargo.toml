@@ -1,5 +1,5 @@
 [package]
-name = "macro_template"
+name = "macro-template"
 version = "0.1.0"
 edition = "2021"
 
@@ -8,4 +8,3 @@ crate-type = ["cdylib"]
 
 [dependencies]
 incro = { path = "../" }
-rand = "0.8.5"

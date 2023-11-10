@@ -24,14 +24,14 @@ fn on_event(incro: Incro, state: &Mutex<State>, event: InputEvent) -> bool {
         InputEventKind::Key(Key::BTN_MIDDLE) => {
             if event.value() == 1 {
                 incro::scopeguard::defer! {
-                    let _ = incro.emit(&[InputEvent::new(EventType::KEY, Key::BTN_LEFT.code(), 0)]);
+                    // let _ = incro.emit(&[InputEvent::new(EventType::KEY, Key::BTN_LEFT.code(), 0)]);
                 };
 
                 state.thread = Some(incro.thread(move |incro| {
                     loop {
                         // Click LEFT
-                        incro.emit(&[InputEvent::new(EventType::KEY, Key::BTN_LEFT.code(), 1)])?;
-                        incro.emit(&[InputEvent::new(EventType::KEY, Key::BTN_LEFT.code(), 0)])?;
+                        // incro.emit(&[InputEvent::new(EventType::KEY, Key::BTN_LEFT.code(), 1)])?;
+                        // incro.emit(&[InputEvent::new(EventType::KEY, Key::BTN_LEFT.code(), 0)])?;
 
                         sleep(Duration::from_nanos(1_000_000_000 / CPS));
                     }

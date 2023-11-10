@@ -1,29 +1,27 @@
-incro!(State, on_event);
+incro::incro!(State, on_event);
 
-use incro::incro;
 use incro::{
     evdev::{EventType, InputEvent, InputEventKind, Key},
-    tokio::sync::Mutex,
-    Methods, TaskHandle,
+    Incro, ThreadHandle,
 };
-
+use std::{sync::Mutex, thread::sleep, time::Duration};
 struct State {
     shift_pressed: bool,
     ctrl_pressed: bool,
-    task: Option<TaskHandle>,
+    thread: Option<ThreadHandle>,
 }
 impl Default for State {
     fn default() -> Self {
         Self {
             shift_pressed: false,
             ctrl_pressed: false,
-            task: None,
+            thread: None,
         }
     }
 }
 
-async fn on_event(methods: Methods, state_mutex: &'static Mutex<State>, event: InputEvent) -> bool {
-    let mut state = state_mutex.lock().await;
+fn on_event(incro: Incro, state_mutex: &'static Mutex<State>, event: InputEvent) -> bool {
+    let mut state = state_mutex.lock().unwrap();
 
     match event.kind() {
         InputEventKind::Key(Key::KEY_LEFTSHIFT) => {
@@ -47,47 +45,48 @@ async fn on_event(methods: Methods, state_mutex: &'static Mutex<State>, event: I
                     return false;
                 }
 
-                state.task = Some(methods.spawn(async move {
+                state.thread = Some(incro.thread(|incro| {
                     // release ctrl if pressed
-                    if state_mutex.lock().await.ctrl_pressed {
-                        methods.emit(&[InputEvent::new(
+                    if state_mutex.lock().unwrap().ctrl_pressed {
+                        incro.emit(&[InputEvent::new(
                             EventType::KEY,
                             Key::KEY_LEFTCTRL.code(),
                             0,
-                        )]);
+                        )])?;
                     }
 
                     loop {
                         // select block
-                        methods.emit(&[InputEvent::new(EventType::KEY, Key::KEY_2.code(), 1)]);
-                        methods.emit(&[InputEvent::new(EventType::KEY, Key::KEY_2.code(), 0)]);
+                        incro.emit(&[InputEvent::new(EventType::KEY, Key::KEY_2.code(), 1)])?;
+                        incro.emit(&[InputEvent::new(EventType::KEY, Key::KEY_2.code(), 0)])?;
 
                         // place
-                        methods.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 1)]);
-                        methods.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 0)]);
+                        incro.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 1)])?;
+                        incro.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 0)])?;
 
-                        methods.sleep(0, 20_000_000).await;
+                        sleep(Duration::from_millis(20));
 
                         // select main weapon
-                        methods.emit(&[InputEvent::new(EventType::KEY, Key::KEY_1.code(), 1)]);
-                        methods.emit(&[InputEvent::new(EventType::KEY, Key::KEY_1.code(), 0)]);
+                        incro.emit(&[InputEvent::new(EventType::KEY, Key::KEY_1.code(), 1)])?;
+                        incro.emit(&[InputEvent::new(EventType::KEY, Key::KEY_1.code(), 0)])?;
 
-                        methods.sleep(0, 100_000_000).await;
+                        sleep(Duration::from_millis(100));
                     }
                 }));
             } else if event.value() == 0 {
-                if state.task.take().is_some() {
+                if state.thread.take().is_some() {
                     // release
-                    methods.emit(&[InputEvent::new(EventType::KEY, Key::KEY_2.code(), 0)]);
-                    methods.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 0)]);
+                    let _ = incro.emit(&[InputEvent::new(EventType::KEY, Key::KEY_2.code(), 0)]);
+                    let _ =
+                        incro.emit(&[InputEvent::new(EventType::KEY, Key::BTN_RIGHT.code(), 0)]);
 
                     // select main weapon
-                    methods.emit(&[InputEvent::new(EventType::KEY, Key::KEY_1.code(), 1)]);
-                    methods.emit(&[InputEvent::new(EventType::KEY, Key::KEY_1.code(), 0)]);
+                    let _ = incro.emit(&[InputEvent::new(EventType::KEY, Key::KEY_1.code(), 1)]);
+                    let _ = incro.emit(&[InputEvent::new(EventType::KEY, Key::KEY_1.code(), 0)]);
 
                     // press ctrl if was originally pressed
                     if state.ctrl_pressed {
-                        methods.emit(&[InputEvent::new(
+                        let _ = incro.emit(&[InputEvent::new(
                             EventType::KEY,
                             Key::KEY_LEFTCTRL.code(),
                             1,
