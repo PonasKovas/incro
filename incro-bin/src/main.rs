@@ -10,6 +10,7 @@ use notify::event::RenameMode;
 use notify::Event;
 use notify::RecursiveMode;
 use notify::Watcher;
+use path_absolutize::Absolutize;
 use std::path::Path;
 use std::sync::mpsc;
 use std::sync::Arc;
@@ -45,15 +46,13 @@ fn run() -> anyhow::Result<()> {
 
     // Protection from input deadlocks during development
     #[cfg(debug_assertions)]
-    {
+    thread::spawn(|| {
         use std::time::Duration;
 
-        thread::spawn(|| {
-            thread::sleep(Duration::from_secs(5));
-            event!(Level::WARN, "Exiting due to debug 5 second timeout.");
-            std::process::exit(0);
-        });
-    }
+        thread::sleep(Duration::from_secs(5));
+        event!(Level::WARN, "Exiting due to debug 5 second timeout.");
+        std::process::exit(0);
+    });
 
     let macros = Arc::new(RwLock::new(BTreeMap::<PathBuf, Library>::new()));
 
@@ -64,7 +63,7 @@ fn run() -> anyhow::Result<()> {
         for entry in std::fs::read_dir(MACROS_DIRECTORY)? {
             let entry = entry?;
 
-            load_macro(&mut *macros, entry.path().canonicalize()?)?;
+            load_macro(&mut macros, entry.path().absolutize()?.into_owned())?;
         }
     }
 
@@ -173,16 +172,16 @@ fn filesystem_event_handler(
                 notify::EventKind::Create(CreateKind::File) => {
                     event!(Level::INFO, "Loading macro (file added)");
 
-                    load(&mut *macros.write().unwrap(), event.paths[0].clone());
+                    load(&mut macros.write().unwrap(), event.paths[0].clone());
                 }
                 notify::EventKind::Modify(ModifyKind::Data(DataChange::Any)) => {
                     event!(Level::INFO, "Reloading macro (file contents changed)");
 
                     let mut macros = macros.write().unwrap();
 
-                    remove(&mut *macros, &event.paths[0]);
+                    remove(&mut macros, &event.paths[0]);
 
-                    load(&mut *macros, event.paths[0].clone());
+                    load(&mut macros, event.paths[0].clone());
                 }
                 notify::EventKind::Modify(ModifyKind::Name(RenameMode::Both)) => {
                     let was_hidden = event.paths[0]
@@ -199,11 +198,11 @@ fn filesystem_event_handler(
                     if was_hidden && !is_hidden {
                         event!(Level::INFO, "Loading macro (file unhidden)");
 
-                        load(&mut *macros.write().unwrap(), event.paths[1].clone());
+                        load(&mut macros.write().unwrap(), event.paths[1].clone());
                     } else if !was_hidden && is_hidden {
                         event!(Level::INFO, "Unloading macro (file hidden)");
 
-                        remove(&mut *macros.write().unwrap(), &event.paths[0]);
+                        remove(&mut macros.write().unwrap(), &event.paths[0]);
                     }
                 }
                 notify::EventKind::Remove(RemoveKind::File) => {

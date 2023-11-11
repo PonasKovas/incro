@@ -45,9 +45,13 @@ impl Incro {
                 return ControlFlow::Break(());
             }
         }
-        self.event_sender.send(events);
+        self.force_emit(events);
 
         ControlFlow::Continue(())
+    }
+    /// Emits fake events even if thread of `Incro` must be stopped
+    pub fn force_emit(&self, events: &[InputEvent]) {
+        self.event_sender.send(events);
     }
     /// Spawns a thread
     pub fn thread<F: FnOnce(Incro) -> ControlFlow<()> + Send + 'static>(
