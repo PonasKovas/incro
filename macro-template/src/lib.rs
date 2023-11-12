@@ -1,4 +1,4 @@
-incro::incro!(State, on_event);
+incro::incro!(Mutex<State>, on_event);
 
 use incro::{
     evdev::{EventType, InputEvent, InputEventKind, Key},
